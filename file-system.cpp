@@ -208,7 +208,6 @@ void importFile() {
     disk.seekp(0);
     disk.write((char*)&boot, sizeof(BootRecord));
     cout << "Arquivo copiado com sucesso!\n";
-    disk.close();
 }
 
 void listFiles() {
@@ -237,6 +236,83 @@ void listFiles() {
                  << " \t| " << (entry.fileSize / 1024.0) << " KB\n";
         }
     }
+}
+
+void exportFile() {
+    fstream disk("disk.img", ios::binary | ios::in);
+    if (!disk) {
+        cout << "Erro ao abrir o disco." << endl;
+        return;
+    }
+    
+    string targetFileName;
+    cout << "Informe o nome do arquivo a ser copiado: ";
+    cin >> targetFileName;
+    
+    size_t ind = targetFileName.find(".");
+    string name = targetFileName.substr(0, ind);
+    string ext = targetFileName.substr(ind + 1);
+
+    disk.seekg(1024);
+    FileEntry entry;
+    bool found = false;
+    for (int i = 0; i < 32; i++) {
+        disk.read((char*)&entry, sizeof(FileEntry));
+        if (entry.status == 0x01 && strcmp(entry.fileName, name.c_str()) == 0 && strcmp(entry.extension, ext.c_str()) == 0) {
+            found = true;
+            break;
+        }
+    }
+    
+    if (!found) {
+        cout << "Arquivo não encontrado." << endl;
+        return;
+    }
+    
+    // Preparar buffer para receber os dados
+    uint32_t totalBytes = entry.fileSize;
+    vector<char> fileData;
+    fileData.reserve(totalBytes);
+    
+    // Ler o bloco de índice
+    uint32_t indexBlockSector = entry.indexBlockPointer;
+    while (indexBlockSector != 0xFFFFFFFF) {
+        // Posicionar no bloco de índice e ler a estrutura
+        disk.seekg(indexBlockSector * 1024);
+        IndexBlock idxBlock;
+        disk.read((char*)&idxBlock, sizeof(IndexBlock));
+        
+        // Para cada ponteiro no bloco de índice (255 entradas)
+        for (int j = 0; j < 255; j++) {
+            uint32_t dataBlockSector = idxBlock.block[j];
+            
+            if (dataBlockSector == 0xFFFFFFFF || fileData.size() >= totalBytes)
+                break;
+            // Ler o bloco de dados
+            vector<char> data(1024);
+            disk.seekg(dataBlockSector * 1024);
+            disk.read(data.data(), 1024);
+            
+            // Acrescentar os dados lidos ao vetor fileData
+            // Se este for o último bloco, pode haver dados a menos que 1024 bytes
+            size_t bytesRestantes = totalBytes - fileData.size();
+            size_t bytesToCopy = min((size_t)1024, bytesRestantes);
+            fileData.insert(fileData.end(), data.begin(), data.begin() + bytesToCopy);
+        }
+        // Passa para o próximo bloco de índice, se houver
+        indexBlockSector = idxBlock.nextIndexBlock;
+    }
+    
+    // Gravar o conteúdo lido em um arquivo no sistema operacional
+    ofstream outFile(name + "_copy." + ext, ios::binary);
+    if (!outFile) {
+        cout << "Erro ao criar o arquivo de saída." << endl;
+        return;
+    }
+    outFile.write(fileData.data(), fileData.size());
+    outFile.close();
+    
+    cout << "Arquivo copiado para o host com sucesso." << endl;
 }
 
 
@@ -314,6 +390,7 @@ int main() {
                 importFile();
                 break;
             case '2':
+                exportFile();
                 break;
             case '3':
                 listFiles();
