@@ -58,6 +58,31 @@ uint32_t getNextFreeBlock(fstream& disk, uint32_t currentBlock) {
     return nextBlock;
 }
 
+void insertAtEnd(fstream& disk, uint32_t value) {
+    BootRecord boot;
+    disk.seekg(0);
+    disk.read((char*)&boot, sizeof(BootRecord));
+    // Acessa a cabeça da lista de blocos livres
+    uint32_t freeBlock = boot.freeBlocksList;
+    // Vai até a respectiva posição no disco
+    disk.seekp(freeBlock * 1024);
+    while (true) {
+        // Percorre a lista até achar o último bloco
+        uint32_t nextBlock;
+        disk.read((char*)&nextBlock, sizeof(uint32_t));
+        if (nextBlock == 0xFFFFFFFF) {
+            // Insere o novo bloco no final
+            disk.write((char*)&value, sizeof(uint32_t));
+            break;
+        }
+        disk.seekg(nextBlock * 1024);
+    }
+    disk.seekp(0);
+    disk.write((char*)&boot, sizeof(BootRecord));
+    boot.freeBlocksCount++;
+    cout << "novo bloco livre " << boot.freeBlocksCount << endl;
+} 
+
 void importFile() {
     fstream disk("disk.img", ios::binary | ios::in | ios::out);
     if (!disk.is_open()) {
@@ -72,6 +97,11 @@ void importFile() {
     cout << "Caminho do arquivo local: ";
     cin >> fileName;
 
+    if (fileName.size() > 16) {
+        cout << "Nome do arquivo muito longo! Deve ter no máximo 16 caracteres.\n";
+        return;
+    }
+    
     ifstream sourceFile(fileName, ios::binary | ios::ate);
 
     if (!sourceFile) {
@@ -208,6 +238,7 @@ void importFile() {
     disk.seekp(0);
     disk.write((char*)&boot, sizeof(BootRecord));
     cout << "Arquivo copiado com sucesso!\n";
+    cout << "Blocos livres: " << boot.freeBlocksCount << endl;
 }
 
 void listFiles() {
@@ -315,6 +346,103 @@ void exportFile() {
     cout << "Arquivo copiado para o host com sucesso." << endl;
 }
 
+void removeFile() {
+    fstream disk("disk.img", ios::binary | ios::in | ios::out);
+    if (!disk) {
+        cout << "Erro ao abrir o disco." << endl;
+        return;
+    }
+    
+    // Recebe o nome do arquivo
+    string targetFileName;
+    cout << "Informe o nome do arquivo a ser removido: ";
+    cin >> targetFileName;
+    
+    // Separa o nome e a extensão
+    size_t ind = targetFileName.find(".");
+    string name = targetFileName.substr(0, ind);
+    string ext = targetFileName.substr(ind + 1);
+
+    // Acessa o bloco de diretórios
+    disk.seekg(1024);
+    // Procura a entrada correspondente ao arquivo
+    FileEntry entry;
+    uint32_t entryPos = -1;
+    for (int i = 0; i < 32; i++) {
+        disk.read((char*)&entry, sizeof(FileEntry));
+        if (entry.status == 0x01 && strcmp(entry.fileName, name.c_str()) == 0 && strcmp(entry.extension, ext.c_str()) == 0) {
+            entryPos = i;
+            break;
+        }
+    }
+    
+    if (entryPos == -1) {
+        cout << "Arquivo não encontrado." << endl;
+        return;
+    }
+    
+    // Desaloca o espaço alocado
+    cout << entry.fileName << "." << entry.extension << " encontrado." << endl;
+    uint32_t indexBlockSector = entry.indexBlockPointer;
+    while (indexBlockSector != 0xFFFFFFFF) {
+        uint32_t indexBlockSectorBytes = indexBlockSector * 1024;
+        // Posiciona no bloco de índice e lê a estrutura
+        disk.seekg(indexBlockSectorBytes);
+        IndexBlock idxBlock;
+        disk.read((char*)&idxBlock, sizeof(IndexBlock));
+        
+        // Para cada ponteiro no bloco de índice (255 entradas)
+        for (int j = 0; j < 255; j++) {
+            uint32_t dataBlockSector = idxBlock.block[j];
+            
+            if (dataBlockSector == 0xFFFFFFFF)
+                break;
+
+            // Adiciona o bloco de dados à lista de blocos livres
+            insertAtEnd(disk, dataBlockSector);
+            
+            // Esvazia o bloco de dados
+            disk.seekp(dataBlockSector * 1024);
+            std::vector<char> buffer(1024, static_cast<char>(0xFF));
+            disk.write(buffer.data(), buffer.size());
+        }
+
+        // Adiciona o bloco de índice à lista de blocos livres
+        insertAtEnd(disk, indexBlockSector);
+        // Esvazia o bloco de índice
+        disk.seekp(indexBlockSectorBytes);
+        std::vector<char> buffer(1024, static_cast<char>(0xFF));
+        disk.write(buffer.data(), buffer.size());
+
+        // Passa para o próximo bloco de índice, se houver
+        uint32_t nextIndexBlock = idxBlock.nextIndexBlock;
+        disk.seekp(indexBlockSectorBytes + 255 * sizeof(uint32_t));
+        disk.write((char*)&nextIndexBlock, sizeof(uint32_t));
+        indexBlockSector = nextIndexBlock;
+    }
+
+    // Marca a entrada como apagada
+    //entry.status = 0xFF;
+    //disk.seekg(1024 + entryPos * sizeof(FileEntry));
+    //disk.read((char*)&entry, sizeof(FileEntry));
+    //cout << "Ainda está aqui " << entry.fileName << "." << entry.extension << endl;
+    disk.seekp(1024 + entryPos * sizeof(FileEntry));
+    vector<char> buffer(sizeof(FileEntry), 0xFF);
+    disk.write(buffer.data(), buffer.size());
+    //disk.write((char*)&entry, sizeof(FileEntry));
+    
+    // Atualiza o BootRecord
+    BootRecord boot;
+    cout << "Quantidade de blocos livres antes: " << boot.freeBlocksCount << endl;
+    disk.seekg(0);
+    disk.read((char*)&boot, sizeof(BootRecord));
+    //boot.freeBlocksCount += ceil(entry.fileSize / 1024.0); já feito no processo de inserção
+    disk.seekp(0);
+    disk.write((char*)&boot, sizeof(BootRecord));
+    
+    cout << "Quantidade de blocos livres depois: " << boot.freeBlocksCount << endl;
+    cout << "Arquivo removido com sucesso." << endl;
+}
 
 int main() {
     char op;
@@ -375,7 +503,7 @@ int main() {
 
                     for (uint32_t sector = 2; sector < totalSectors; sector++) {
                         uint32_t nextSector = (sector < boot.totalSectors - 1) ? sector + 1 : 0xFFFFFFFF;
-                        // Calcule a posição no arquivo "disk.dat" para o setor atual
+                        // Calcule a posição no arquivo "disk.img" para o setor atual
                         streampos pos = sector * boot.bytesPerSector;
                         disk.seekp(pos);
                         // Escreva o valor de nextSector nos primeiros 4 bytes
@@ -383,6 +511,7 @@ int main() {
                     }
 
                     disk.close();
+                    cout << "Blocos livres " << boot.freeBlocksCount << endl;
                     cout << "Partição formatada com sucesso!\n";
                 }
                 break;
@@ -396,6 +525,7 @@ int main() {
                 listFiles();
                 break;
             case '4':
+                removeFile();
                 break;
             case '5':
                 return 0;
