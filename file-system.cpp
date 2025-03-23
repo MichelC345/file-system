@@ -1,4 +1,3 @@
-
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -6,7 +5,6 @@
 #include <cstring>
 #include <cstdint>
 #include <cmath>
-#include "LinkedList.h"
 
 using namespace std;
 
@@ -19,9 +17,9 @@ struct BootRecord {
     uint16_t dirBlockSectors;      // Offset 0x09: Número de setores no Bloco de Diretórios (2 bytes)
     uint32_t dataSectionSectors;   // Offset 0x0B: Número de setores na Seção de Dados (4 bytes)
     uint32_t fileCount;            // Offset 0x0F: Quantidade de arquivos armazenados no sistema (4 bytes)
-    uint32_t freeBlocksCount;
-    uint32_t freeBlocksList;       // Offset 0x13: Ponteiro para o primeiro bloco livre (4 bytes)
-    char empty[997];            // Offset 0x17: Vazio. Preenche o resto do setor (1000 bytes)
+    uint32_t freeBlocksCount;      // Offset 0x13: Contador de blocos livres
+    uint32_t freeBlocksList;       // Offset 0x17: Ponteiro para o primeiro bloco livre (4 bytes)
+    char empty[997];            // Offset 0x1B: Vazio. Preenche o resto do setor (1000 bytes)
 };
 
 struct FileEntry {
@@ -80,8 +78,7 @@ void insertAtEnd(fstream& disk, uint32_t value) {
     disk.seekp(0);
     disk.write((char*)&boot, sizeof(BootRecord));
     boot.freeBlocksCount++;
-    cout << "novo bloco livre " << boot.freeBlocksCount << endl;
-} 
+}
 
 void importFile() {
     fstream disk("disk.img", ios::binary | ios::in | ios::out);
@@ -92,16 +89,20 @@ void importFile() {
     BootRecord boot;
     disk.read((char*)&boot, sizeof(BootRecord));
 
-    // 2. Verificar se há espaço livre suficiente
+    // Verifica se há espaço livre suficiente
     string fileName;
     cout << "Caminho do arquivo local: ";
     cin >> fileName;
 
-    if (fileName.size() > 16) {
+    size_t ind = fileName.find(".");
+    string name = fileName.substr(0, ind);
+    string ext = fileName.substr(ind + 1);
+
+    if (name.size() > 16) {
         cout << "Nome do arquivo muito longo! Deve ter no máximo 16 caracteres.\n";
         return;
     }
-    
+
     ifstream sourceFile(fileName, ios::binary | ios::ate);
 
     if (!sourceFile) {
@@ -112,20 +113,18 @@ void importFile() {
     sourceFile.seekg(0, ios::end);
     uint32_t fileSize = sourceFile.tellg();
     sourceFile.seekg(0, ios::beg);
+
+    // Calcula os blocos necessários
     uint32_t blockSize = boot.bytesPerSector;
     uint32_t dataBlocksNeeded = (fileSize + boot.bytesPerSector - 1) / boot.bytesPerSector;
     uint32_t indice = (dataBlocksNeeded + 254) / 255;
 
-    // Calcular blocos necessários: 1 (índice) + ceil(fileSize / 1024)
     int blocksNeeded = indice + dataBlocksNeeded;
     if (boot.freeBlocksCount < blocksNeeded) {
         cout << "Espaço insuficiente! Necessário: " << blocksNeeded << " blocos\n";
         return;
     }
-    size_t ind = fileName.find(".");
-    string name = fileName.substr(0, ind);
-    string ext = fileName.substr(ind + 1);
-    // 3. Verificar se o arquivo já existe no diretório
+    // Verifica se o arquivo já existe no diretório
     FileEntry entry;
     bool exists = false;
     disk.seekg(1024); // Diretório no setor 1
@@ -141,7 +140,7 @@ void importFile() {
         return;
     }
 
-    // Alocar blocos de índice
+    // Aloca blocos de índice
     vector<uint32_t> indexBlocks;
     for (int i = 0; i < indice; i++) {
         uint32_t indexBlock = boot.freeBlocksList;
@@ -150,7 +149,7 @@ void importFile() {
         indexBlocks.push_back(indexBlock);
     }
 
-    // Alocar blocos de dados
+    // Aloca blocos de dados
     vector<uint32_t> dataBlocks;
     for (int i = 0; i < dataBlocksNeeded; i++) {
         uint32_t dataBlock = boot.freeBlocksList;
@@ -166,7 +165,7 @@ void importFile() {
     newEntry.indexBlockPointer = indexBlocks[0];
     newEntry.attributes = 0x01;
 
-    disk.seekg(1024); // Posição inicial do diretório
+    disk.seekg(1024);
     int dirEntryPos = -1;
     for (int i = 0; i < 32; i++) {
         streampos pos = 1024 + i * sizeof(FileEntry);
@@ -187,7 +186,7 @@ void importFile() {
     disk.seekp(pos);
     disk.write((char*)&newEntry, sizeof(FileEntry));
 
-    // 5. Alocar blocos de dados e escrever conteúdo
+    // Aloca blocos de dados e escrever conteúdo
     char buffer[1024];
     uint32_t bytesRemaining = fileSize;
 
@@ -234,11 +233,12 @@ void importFile() {
         disk.write((char*)&idxBlock, sizeof(IndexBlock));
     }
 
-    // 8. Atualizar BootRecord
+    // Atualiza o BootRecord
     disk.seekp(0);
     disk.write((char*)&boot, sizeof(BootRecord));
     cout << "Arquivo copiado com sucesso!\n";
     cout << "Blocos livres: " << boot.freeBlocksCount << endl;
+    disk.close();
 }
 
 void listFiles() {
@@ -255,11 +255,11 @@ void listFiles() {
     cout << "Nome \t\t| Extensão \t| Tamanho (KB)\n";
     cout << "----------------------------------------\n";
 
-    for (int i = 0; i < 32; i++) {  // Se o diretório tiver 32 entradas
+    for (int i = 0; i < 32; i++) { 
         disk.read((char*)&entry, sizeof(FileEntry));
         if (entry.status == 0x01) {
             string fileName(entry.fileName, 16);
-            fileName = fileName.c_str(); // Remove padding
+            fileName = fileName.c_str(); 
             string ext(entry.extension, 4);
             ext = ext.c_str();
             cout << fileName
@@ -267,6 +267,7 @@ void listFiles() {
                  << " \t| " << (entry.fileSize / 1024.0) << " KB\n";
         }
     }
+    disk.close();
 }
 
 void exportFile() {
@@ -275,11 +276,12 @@ void exportFile() {
         cout << "Erro ao abrir o disco." << endl;
         return;
     }
-    
+
     string targetFileName;
     cout << "Informe o nome do arquivo a ser copiado: ";
     cin >> targetFileName;
-    
+
+    // Separa o nome e a extensão
     size_t ind = targetFileName.find(".");
     string name = targetFileName.substr(0, ind);
     string ext = targetFileName.substr(ind + 1);
@@ -294,37 +296,37 @@ void exportFile() {
             break;
         }
     }
-    
+
     if (!found) {
         cout << "Arquivo não encontrado." << endl;
         return;
     }
-    
-    // Preparar buffer para receber os dados
+
+    // Prepara o buffer para receber os dados
     uint32_t totalBytes = entry.fileSize;
     vector<char> fileData;
     fileData.reserve(totalBytes);
-    
-    // Ler o bloco de índice
+
+    // Leitura do bloco de índice
     uint32_t indexBlockSector = entry.indexBlockPointer;
     while (indexBlockSector != 0xFFFFFFFF) {
-        // Posicionar no bloco de índice e ler a estrutura
+        // Posiciona no bloco de índice e lê a estrutura
         disk.seekg(indexBlockSector * 1024);
         IndexBlock idxBlock;
         disk.read((char*)&idxBlock, sizeof(IndexBlock));
-        
-        // Para cada ponteiro no bloco de índice (255 entradas)
+
+        // Para cada ponteiro no bloco de índice
         for (int j = 0; j < 255; j++) {
             uint32_t dataBlockSector = idxBlock.block[j];
-            
+
             if (dataBlockSector == 0xFFFFFFFF || fileData.size() >= totalBytes)
                 break;
-            // Ler o bloco de dados
+            // Lê o bloco de dados
             vector<char> data(1024);
             disk.seekg(dataBlockSector * 1024);
             disk.read(data.data(), 1024);
-            
-            // Acrescentar os dados lidos ao vetor fileData
+
+            // Acrescenta os dados lidos ao vetor fileData
             // Se este for o último bloco, pode haver dados a menos que 1024 bytes
             size_t bytesRestantes = totalBytes - fileData.size();
             size_t bytesToCopy = min((size_t)1024, bytesRestantes);
@@ -333,8 +335,8 @@ void exportFile() {
         // Passa para o próximo bloco de índice, se houver
         indexBlockSector = idxBlock.nextIndexBlock;
     }
-    
-    // Gravar o conteúdo lido em um arquivo no sistema operacional
+
+    // Grava o conteúdo lido em um arquivo no sistema operacional
     ofstream outFile(name + "_copy." + ext, ios::binary);
     if (!outFile) {
         cout << "Erro ao criar o arquivo de saída." << endl;
@@ -342,7 +344,7 @@ void exportFile() {
     }
     outFile.write(fileData.data(), fileData.size());
     outFile.close();
-    
+    disk.close();
     cout << "Arquivo copiado para o host com sucesso." << endl;
 }
 
@@ -444,6 +446,98 @@ void removeFile() {
     cout << "Arquivo removido com sucesso." << endl;
 }
 
+void deleteFile() {
+    fstream disk("disk.img", ios::binary | ios::in | ios::out);
+    if (!disk.is_open()) {
+        cerr << "Erro ao abrir o disco!\n";
+        return;
+    }
+
+    BootRecord boot;
+    disk.read((char*)&boot, sizeof(BootRecord));
+
+    // Solicita o nome do arquivo
+    string fileName;
+    cout << "Nome do arquivo a ser removido: ";
+    cin >> fileName;
+
+    size_t ind = fileName.find(".");
+    string name = fileName.substr(0, ind);
+    string ext = fileName.substr(ind + 1);
+
+    // Procura o arquivo no diretório
+    FileEntry targetEntry;
+    int entryPosition = -1;
+    disk.seekg(1024); 
+    for (int i = 0; i < 32; i++) {
+        streampos pos = 1024 + i * sizeof(FileEntry);
+        disk.seekg(pos);
+        disk.read((char*)&targetEntry, sizeof(FileEntry));
+
+        if (targetEntry.status == 0x01) {
+            string currentName(targetEntry.fileName, 16);
+            currentName = currentName.c_str();
+            if (currentName == name) {
+                entryPosition = i;
+                break;
+            }
+        }
+    }
+
+    if (entryPosition == -1) {
+        cout << "Arquivo não encontrado!\n";
+        return;
+    }
+
+    // Coleta todos os blocos (índice + dados)
+    vector<uint32_t> blocksToFree;
+    uint32_t currentIndexBlock = targetEntry.indexBlockPointer;
+
+    // Percorre a cadeia de blocos de índice
+    while (currentIndexBlock != 0xFFFFFFFF) {
+        IndexBlock idxBlock;
+        disk.seekg(currentIndexBlock * 1024);
+        disk.read((char*)&idxBlock, sizeof(IndexBlock));
+        
+        // Adiciona o bloco de índice à lista
+        blocksToFree.push_back(currentIndexBlock);
+
+        // Coleta blocos de dados deste índice
+        for (int i = 0; i < 255; i++) {
+            if (idxBlock.block[i] == 0xFFFFFFFF) break;
+            blocksToFree.push_back(idxBlock.block[i]);
+        }
+
+        currentIndexBlock = idxBlock.nextIndexBlock;
+    }
+
+    // Libera os blocos, inserindo no começo
+    for (uint32_t block : blocksToFree) {
+        // Escreve o próximo bloco livre atual no bloco sendo liberado
+        uint32_t nextFree = boot.freeBlocksList;
+        disk.seekp(block * 1024);
+        disk.write((char*)&nextFree, sizeof(uint32_t));
+
+        // Atualiza o BootRecord para apontar para este novo bloco livre
+        boot.freeBlocksList = block;
+        boot.freeBlocksCount++;
+    }
+
+    // Marca a entrada como inválida
+    targetEntry.status = 0xFF;
+    disk.seekp(1024 + entryPosition * sizeof(FileEntry));
+    disk.write((char*)&targetEntry, sizeof(FileEntry));
+
+    // Atualiza o BootRecord
+    boot.fileCount--;
+    disk.seekp(0);
+    disk.write((char*)&boot, sizeof(BootRecord));
+
+    cout << "Arquivo removido com sucesso!\n";
+    cout << "Blocos livres: " << boot.freeBlocksCount << endl;
+    disk.close();
+}
+
 int main() {
     char op;
     uint32_t totalSectors;
@@ -473,13 +567,6 @@ int main() {
                     boot.freeBlocksCount = boot.dataSectionSectors;
                     boot.fileCount = 0;
                     boot.freeBlocksList = boot.reservedSectors + boot.dirBlockSectors;
-                    // Inicializa a lista de blocos livres
-                    //boot.freeBlocksList = new LinkedList();
-                    //for (uint32_t i = 2; i <= totalSectors; i++) {
-                        //boot.freeBlocksList->insertAtEnd(i);
-                    //}
-
-
 
                     ofstream disk("disk.img", ios::binary | ios::trunc);
                     if (!disk) {
@@ -496,17 +583,18 @@ int main() {
                     disk.write(dirBlock, boot.bytesPerSector);
 
                     // Preenche o restante do disco com zeros
-                    /*vector<char> emptySector(boot.bytesPerSector, 0);
+                    vector<char> emptySector(boot.bytesPerSector, 0);
                     for (uint32_t i = 2; i < totalSectors; ++i) {
                         disk.write(emptySector.data(), boot.bytesPerSector);
-                    }*/
-
+                    }
+                    
+                    // Inicializa a lista ligada de blocos livres
                     for (uint32_t sector = 2; sector < totalSectors; sector++) {
                         uint32_t nextSector = (sector < boot.totalSectors - 1) ? sector + 1 : 0xFFFFFFFF;
-                        // Calcule a posição no arquivo "disk.img" para o setor atual
+                        // Calcula a posição
                         streampos pos = sector * boot.bytesPerSector;
                         disk.seekp(pos);
-                        // Escreva o valor de nextSector nos primeiros 4 bytes
+                        // Escreve o valor de nextSector nos primeiros 4 bytes
                         disk.write(reinterpret_cast<char*>(&nextSector), sizeof(uint32_t));
                     }
 
@@ -525,7 +613,7 @@ int main() {
                 listFiles();
                 break;
             case '4':
-                removeFile();
+                deleteFile();
                 break;
             case '5':
                 return 0;
