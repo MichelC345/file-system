@@ -92,14 +92,16 @@ void importFile() {
         cout << "Espaço insuficiente! Necessário: " << blocksNeeded << " blocos\n";
         return;
     }
-
+    size_t ind = fileName.find(".");
+    string name = fileName.substr(0, ind);
+    string ext = fileName.substr(ind + 1);
     // 3. Verificar se o arquivo já existe no diretório
     FileEntry entry;
     bool exists = false;
     disk.seekg(1024); // Diretório no setor 1
     for (int i = 0; i < 32; i++) {
         disk.read((char*)&entry, sizeof(FileEntry));
-        if (entry.status != 0xFF && strcmp(entry.fileName, fileName.c_str()) == 0) {
+        if (entry.status != 0xFF && strcmp(entry.fileName, name.c_str()) == 0) {
             exists = true;
             break;
         }
@@ -126,11 +128,10 @@ void importFile() {
         boot.freeBlocksCount--;
         dataBlocks.push_back(dataBlock);
     }
-
     FileEntry newEntry;
     newEntry.status = 0x01; // Válido
-    strncpy(newEntry.fileName, fileName.c_str(), 16);
-    strncpy(newEntry.extension, "", 4);
+    strncpy(newEntry.fileName, name.c_str(), 16);
+    strncpy(newEntry.extension, ext.c_str(), 4);
     newEntry.fileSize = fileSize;
     newEntry.indexBlockPointer = indexBlocks[0];
     newEntry.attributes = 0x01;
@@ -141,7 +142,7 @@ void importFile() {
         streampos pos = 1024 + i * sizeof(FileEntry);
         disk.seekg(pos);
         disk.read((char*)&entry, sizeof(FileEntry));
-        if (entry.status == 0x00) {
+        if (entry.status == 0x00 || entry.status == 0xFF) {
             dirEntryPos = i;
             break;
         }
@@ -206,9 +207,38 @@ void importFile() {
     // 8. Atualizar BootRecord
     disk.seekp(0);
     disk.write((char*)&boot, sizeof(BootRecord));
-
-    std::cout << "Arquivo copiado com sucesso!\n";
+    cout << "Arquivo copiado com sucesso!\n";
+    disk.close();
 }
+
+void listFiles() {
+    ifstream disk("disk.img", ios::binary);
+    if (!disk) {
+        cout << "Erro ao abrir o disco." << endl;
+        return;
+    }
+    disk.seekg(1024);
+    FileEntry entry;
+    //cout << "Lista de Arquivos:" << endl;
+    cout << "\nArquivos no sistema:\n";
+    cout << "----------------------------------------\n";
+    cout << "Nome \t\t| Extensão \t| Tamanho (KB)\n";
+    cout << "----------------------------------------\n";
+
+    for (int i = 0; i < 32; i++) {  // Se o diretório tiver 32 entradas
+        disk.read((char*)&entry, sizeof(FileEntry));
+        if (entry.status == 0x01) {
+            string fileName(entry.fileName, 16);
+            fileName = fileName.c_str(); // Remove padding
+            string ext(entry.extension, 4);
+            ext = ext.c_str();
+            cout << fileName
+                 << " \t| " << ext
+                 << " \t| " << (entry.fileSize / 1024.0) << " KB\n";
+        }
+    }
+}
+
 
 int main() {
     char op;
@@ -247,7 +277,7 @@ int main() {
 
 
 
-                    std::ofstream disk("disk.img", ios::binary | ios::trunc);
+                    ofstream disk("disk.img", ios::binary | ios::trunc);
                     if (!disk) {
                         cout << "Erro ao criar o arquivo do disco!\n";
                         break;
@@ -286,6 +316,7 @@ int main() {
             case '2':
                 break;
             case '3':
+                listFiles();
                 break;
             case '4':
                 break;
