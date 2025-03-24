@@ -38,7 +38,20 @@ struct IndexBlock {
 };
 #pragma pack(pop)
 
+
+void Clear () {
+    //printf("\033[H\033[2J"); //limpar a tela (Unix)
+    system("cls"); //limpar a tela (Windows)
+}
+
+void WaitUser() {
+    cout << "Pressione ENTER para continuar...";
+    cin.ignore();
+    cin.get();
+}
+
 void displayMenu() {
+    Clear();
     std::cout << "Sistema de Arquivos\n";
     std::cout << "0 - Formatar uma partição\n";
     std::cout << "1 - Cópia para o sistema de arquivos\n";
@@ -348,104 +361,6 @@ void exportFile() {
     cout << "Arquivo copiado para o host com sucesso." << endl;
 }
 
-void removeFile() {
-    fstream disk("disk.img", ios::binary | ios::in | ios::out);
-    if (!disk) {
-        cout << "Erro ao abrir o disco." << endl;
-        return;
-    }
-    
-    // Recebe o nome do arquivo
-    string targetFileName;
-    cout << "Informe o nome do arquivo a ser removido: ";
-    cin >> targetFileName;
-    
-    // Separa o nome e a extensão
-    size_t ind = targetFileName.find(".");
-    string name = targetFileName.substr(0, ind);
-    string ext = targetFileName.substr(ind + 1);
-
-    // Acessa o bloco de diretórios
-    disk.seekg(1024);
-    // Procura a entrada correspondente ao arquivo
-    FileEntry entry;
-    uint32_t entryPos = -1;
-    for (int i = 0; i < 32; i++) {
-        disk.read((char*)&entry, sizeof(FileEntry));
-        if (entry.status == 0x01 && strcmp(entry.fileName, name.c_str()) == 0 && strcmp(entry.extension, ext.c_str()) == 0) {
-            entryPos = i;
-            break;
-        }
-    }
-    
-    if (entryPos == -1) {
-        cout << "Arquivo não encontrado." << endl;
-        return;
-    }
-    
-    // Desaloca o espaço alocado
-    cout << entry.fileName << "." << entry.extension << " encontrado." << endl;
-    uint32_t indexBlockSector = entry.indexBlockPointer;
-    while (indexBlockSector != 0xFFFFFFFF) {
-        uint32_t indexBlockSectorBytes = indexBlockSector * 1024;
-        // Posiciona no bloco de índice e lê a estrutura
-        disk.seekg(indexBlockSectorBytes);
-        IndexBlock idxBlock;
-        disk.read((char*)&idxBlock, sizeof(IndexBlock));
-        
-        // Para cada ponteiro no bloco de índice (255 entradas)
-        for (int j = 0; j < 255; j++) {
-            uint32_t dataBlockSector = idxBlock.block[j];
-            
-            if (dataBlockSector == 0xFFFFFFFF)
-                break;
-
-            // Adiciona o bloco de dados à lista de blocos livres
-            insertAtEnd(disk, dataBlockSector);
-            
-            // Esvazia o bloco de dados
-            disk.seekp(dataBlockSector * 1024);
-            std::vector<char> buffer(1024, static_cast<char>(0xFF));
-            disk.write(buffer.data(), buffer.size());
-        }
-
-        // Adiciona o bloco de índice à lista de blocos livres
-        insertAtEnd(disk, indexBlockSector);
-        // Esvazia o bloco de índice
-        disk.seekp(indexBlockSectorBytes);
-        std::vector<char> buffer(1024, static_cast<char>(0xFF));
-        disk.write(buffer.data(), buffer.size());
-
-        // Passa para o próximo bloco de índice, se houver
-        uint32_t nextIndexBlock = idxBlock.nextIndexBlock;
-        disk.seekp(indexBlockSectorBytes + 255 * sizeof(uint32_t));
-        disk.write((char*)&nextIndexBlock, sizeof(uint32_t));
-        indexBlockSector = nextIndexBlock;
-    }
-
-    // Marca a entrada como apagada
-    //entry.status = 0xFF;
-    //disk.seekg(1024 + entryPos * sizeof(FileEntry));
-    //disk.read((char*)&entry, sizeof(FileEntry));
-    //cout << "Ainda está aqui " << entry.fileName << "." << entry.extension << endl;
-    disk.seekp(1024 + entryPos * sizeof(FileEntry));
-    vector<char> buffer(sizeof(FileEntry), 0xFF);
-    disk.write(buffer.data(), buffer.size());
-    //disk.write((char*)&entry, sizeof(FileEntry));
-    
-    // Atualiza o BootRecord
-    BootRecord boot;
-    cout << "Quantidade de blocos livres antes: " << boot.freeBlocksCount << endl;
-    disk.seekg(0);
-    disk.read((char*)&boot, sizeof(BootRecord));
-    //boot.freeBlocksCount += ceil(entry.fileSize / 1024.0); já feito no processo de inserção
-    disk.seekp(0);
-    disk.write((char*)&boot, sizeof(BootRecord));
-    
-    cout << "Quantidade de blocos livres depois: " << boot.freeBlocksCount << endl;
-    cout << "Arquivo removido com sucesso." << endl;
-}
-
 void deleteFile() {
     fstream disk("disk.img", ios::binary | ios::in | ios::out);
     if (!disk.is_open()) {
@@ -477,7 +392,9 @@ void deleteFile() {
         if (targetEntry.status == 0x01) {
             string currentName(targetEntry.fileName, 16);
             currentName = currentName.c_str();
-            if (currentName == name) {
+            string currentExt(targetEntry.extension, 4);
+            currentExt = currentExt.c_str();
+            if (currentName == name && currentExt == ext) {
                 entryPosition = i;
                 break;
             }
@@ -601,19 +518,24 @@ int main() {
                     disk.close();
                     cout << "Blocos livres " << boot.freeBlocksCount << endl;
                     cout << "Partição formatada com sucesso!\n";
+                    WaitUser(); 
                 }
                 break;
             case '1':
                 importFile();
+                WaitUser();
                 break;
             case '2':
                 exportFile();
+                WaitUser();
                 break;
             case '3':
                 listFiles();
+                WaitUser();
                 break;
             case '4':
                 deleteFile();
+                WaitUser();
                 break;
             case '5':
                 return 0;
